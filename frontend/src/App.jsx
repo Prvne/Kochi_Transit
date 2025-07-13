@@ -5,6 +5,7 @@ import "leaflet/dist/leaflet.css";
 import debounce from 'lodash.debounce';
 import { useMap } from "react-leaflet";
 import { useRef } from "react";
+import "./App.css";
 
 function App() {
   const [userPos, setUserPos] = useState(null);
@@ -20,7 +21,7 @@ function App() {
   const [routeColors, setRouteColors] = useState({});
   const [showShape, setShowShape] = useState(false);
   const [selectedRouteId, setSelectedRouteId] = useState(null);
-  const [visibleModes, setVisibleModes] = useState([3, 4, 2, 0]);
+  const [visibleModes, setVisibleModes] = useState([3, 4, 2, 0, 1]);
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const mapRef = useRef(null);
@@ -268,19 +269,20 @@ function App() {
     return new L.DivIcon({
       html: `<div style="
         background: ${modeInfo.color};
-        width: 20px;
-        height: 20px;
+        width: 24px;
+        height: 24px;
         border-radius: 50%;
         border: 2px solid white;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        font-size: 12px;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        font-weight: bold;
       ">${modeInfo.icon}</div>`,
       className: 'custom-marker',
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
     });
   };
 
@@ -292,7 +294,7 @@ function App() {
         const bounds = shape.map(([lat, lon]) => [lat, lon]);
         map.fitBounds(bounds, { padding: [30, 30] });
       }
-    }, [shape]);
+    }, [shape, map]);
 
     return null;
   };
@@ -306,6 +308,7 @@ function App() {
           <button 
             className="collapse-btn"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
             {sidebarCollapsed ? '→' : '←'}
           </button>
@@ -313,12 +316,24 @@ function App() {
 
         {!sidebarCollapsed && (
           <div className="sidebar-content">
-            {error && <div className="error-message">{error}</div>}
-            {isLoading && <div className="loading-indicator">Loading...</div>}
+            {error && (
+              <div className="error-message">
+                <span className="error-icon">⚠️</span>
+                {error}
+              </div>
+            )}
+            
+            {isLoading && (
+              <div className="loading-indicator">
+                <div className="loading-spinner"></div>
+                Loading...
+              </div>
+            )}
 
             {!userPos && (
-              <div className="location-input">
-                <h3>Set Your Location</h3>
+              <div className="location-section">
+                <h3>📍 Set Your Location</h3>
+                <p className="section-description">Enter your coordinates to find nearby transit options</p>
                 <input
                   type="text"
                   placeholder="Enter lat,lon (e.g., 9.9312, 76.2673)"
@@ -335,10 +350,11 @@ function App() {
             {userPos && (
               <>
                 <div className="search-section">
-                  <h3>Find Routes</h3>
+                  <h3>🎯 Find Routes</h3>
+                  <p className="section-description">Search for destinations or enter coordinates</p>
                   <input
                     type="text"
-                    placeholder="Search destination..."
+                    placeholder="Search destination or enter lat,lon..."
                     value={destSearchTerm}
                     onChange={(e) => handleUnifiedDestSearch(e.target.value)}
                     className="input-field"
@@ -363,7 +379,8 @@ function App() {
                 </div>
 
                 <div className="filter-section">
-                  <h3>Transport Modes</h3>
+                  <h3>🚊 Transport Modes</h3>
+                  <p className="section-description">Filter stops by transport type</p>
                   <div className="mode-filters">
                     {Object.entries(transportModes).map(([mode, info]) => (
                       <button
@@ -376,7 +393,11 @@ function App() {
                               : [...prev, parseInt(mode)]
                           )
                         }
-                        style={{ '--mode-color': info.color }}
+                        style={{ 
+                          '--mode-color': info.color,
+                          backgroundColor: visibleModes.includes(parseInt(mode)) ? info.color : 'transparent',
+                          borderColor: info.color
+                        }}
                       >
                         <span className="mode-icon">{info.icon}</span>
                         <span className="mode-label">{info.label}</span>
@@ -388,7 +409,7 @@ function App() {
                 {routesInfo.length > 0 && (
                   <div className="routes-section">
                     <div className="routes-header">
-                      <h3>Available Routes ({routesInfo.length})</h3>
+                      <h3>🛤️ Available Routes ({routesInfo.length})</h3>
                       <button onClick={handleReset} className="clear-button">
                         Clear All
                       </button>
@@ -410,7 +431,7 @@ function App() {
                               style={{ backgroundColor: routeColors[route.route_id] }}
                             ></div>
                             <div className="route-name">
-                              {route.route_long_name || route.route_id}
+                              {route.route_id || 'Unknown Route'}
                             </div>
                           </div>
                           
@@ -429,7 +450,7 @@ function App() {
 
                           {route.next_departures && route.next_departures.length > 0 && (
                             <div className="departures">
-                              <span className="departures-label">Next departures:</span>
+                              <span className="departures-label">⏰ Next departures:</span>
                               <div className="departure-times">
                                 {route.next_departures.slice(0, 3).map((time, idx) => (
                                   <span key={idx} className="departure-time">{time}</span>
@@ -440,6 +461,18 @@ function App() {
                         </div>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {userPos && (
+                  <div className="location-info">
+                    <h3>📍 Current Location</h3>
+                    <p className="coordinates">
+                      {userPos[0].toFixed(4)}, {userPos[1].toFixed(4)}
+                    </p>
+                    <p className="nearby-count">
+                      {stops.filter(s => visibleModes.includes(s.mode)).length} nearby stops
+                    </p>
                   </div>
                 )}
               </>
@@ -516,7 +549,7 @@ function App() {
                       <Polyline
                         positions={routeShapes[r.route_id]}
                         color={routeColors[r.route_id] || "#00bcd4"}
-                        weight={4}
+                        weight={5}
                         opacity={0.8}
                       />
                     </>
@@ -526,7 +559,7 @@ function App() {
                       <div className="popup-content">
                         <strong>🎯 {r.end_stop.stop_name}</strong>
                         <br />
-                        <span className="popup-route">Route: {r.route_long_name || r.route_id}</span>
+                        <span className="popup-route">Route: {r.route_id}</span>
                       </div>
                     </Popup>
                   </Marker>
