@@ -4,18 +4,45 @@ import pandas as pd
 from geopy.distance import geodesic
 from services.gtfs_loader import load_all_gtfs
 from datetime import datetime
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS so React can access the API
 
 # Load GTFS data at startup
-gtfs_data = load_all_gtfs()
-stops_df = gtfs_data["stops.txt"]
-routes_df = gtfs_data["routes.txt"]
-stop_times_df = gtfs_data["stop_times.txt"]
-trips_df = gtfs_data["trips.txt"]
-shapes_df = gtfs_data["shapes.txt"]
-
+try:
+    logger.info("Loading GTFS data...")
+    gtfs_data = load_all_gtfs()
+    stops_df = gtfs_data["stops.txt"]
+    routes_df = gtfs_data["routes.txt"]
+    stop_times_df = gtfs_data["stop_times.txt"]
+    trips_df = gtfs_data["trips.txt"]
+    shapes_df = gtfs_data.get("shapes.txt", pd.DataFrame())
+    
+    logger.info(f"Loaded {len(stops_df)} stops")
+    logger.info(f"Loaded {len(routes_df)} routes")
+    logger.info(f"Loaded {len(stop_times_df)} stop times")
+    logger.info(f"Loaded {len(trips_df)} trips")
+    logger.info(f"Loaded {len(shapes_df)} shapes")
+    
+    # Print sample data for debugging
+    logger.info("Sample stops data:")
+    logger.info(stops_df.head())
+    logger.info("Sample routes data:")
+    logger.info(routes_df.head())
+    
+except Exception as e:
+    logger.error(f"Error loading GTFS data: {e}")
+    # Initialize empty dataframes as fallback
+    stops_df = pd.DataFrame()
+    routes_df = pd.DataFrame()
+    stop_times_df = pd.DataFrame()
+    trips_df = pd.DataFrame()
+    shapes_df = pd.DataFrame()
 
 
 def get_next_departures(trip_ids, stop_id, count=3):
@@ -57,9 +84,16 @@ def get_nearest_stops(lat, lon, radius_km=1.0):
 @app.route("/stops_nearby_with_mode")
 def stops_nearby_with_mode():
     try:
+        logger.debug("Received request for nearby stops")
         lat = float(request.args.get("lat"))
         lon = float(request.args.get("lon"))
         radius_km = float(request.args.get("radius_km", 1))
+        
+        logger.debug(f"Searching for stops near {lat}, {lon} within {radius_km} km")
+        
+        if stops_df.empty:
+            logger.error("Stops dataframe is empty")
+            return jsonify({"error": "No stops data available"}), 500
 
         # Compute distances
         stops_with_dist = stops_df.copy()
@@ -69,6 +103,7 @@ def stops_nearby_with_mode():
         )
 
         nearby = stops_with_dist[stops_with_dist["distance_km"] <= radius_km]
+        logger.debug(f"Found {len(nearby)} nearby stops")
 
         # Link stops -> stop_times -> trips -> routes to get mode
         stop_times_subset = stop_times_df[stop_times_df["stop_id"].isin(nearby["stop_id"])]
@@ -85,7 +120,7 @@ def stops_nearby_with_mode():
             route_types = routes_subset[routes_subset["route_id"].isin(route_ids_for_stop)]["route_type"].unique()
             
             # Pick first available type or -1 if none
-            stop_modes[stop_id] = int(route_types[0]) if len(route_types) > 0 else -1
+            stop_modes[stop_id] = int(route_types[0]) if len(route_types) > 0 else 3
 
         # Build result
         results = []
@@ -99,21 +134,24 @@ def stops_nearby_with_mode():
                 "mode": stop_modes[row["stop_id"]]
             })
 
+        logger.debug(f"Returning {len(results)} stops")
         return jsonify(results)
 
     except Exception as e:
+        logger.error(f"Error in stops_nearby_with_mode: {e}")
         return jsonify({"error": str(e)}), 400
     
 @app.route("/routes_from_to")
 def routes_from_to():
     try:
+        logger.debug("Received request for routes")
         start_lat = float(request.args.get("start_lat"))
         start_lon = float(request.args.get("start_lon"))
         end_lat = float(request.args.get("end_lat"))
         end_lon = float(request.args.get("end_lon"))
         radius_km = float(request.args.get("radius_km", 1))
 
-
+        logger.debug(f"Finding routes from {start_lat},{start_lon} to {end_lat},{end_lon}")
 
         start_nearby = get_nearest_stops(start_lat, start_lon, radius_km)
         end_nearby = get_nearest_stops(end_lat, end_lon, radius_km)
@@ -132,7 +170,11 @@ def routes_from_to():
         for route_id in route_ids:
             route = routes_df[routes_df["route_id"] == route_id].iloc[0]
             trip_ids = trip_info[trip_info["route_id"] == route_id]["trip_id"]
-            shape_id = trip_info[trip_info["route_id"] == route_id]["shape_id"].iloc[0]
+            
+            # Get shape_id if available
+            shape_ids = trip_info[trip_info["route_id"] == route_id]["shape_id"]
+            shape_id = shape_ids.iloc[0] if len(shape_ids) > 0 and not pd.isna(shape_ids.iloc[0]) else None
+            
             relevant_stop_times = stop_times_df[stop_times_df["trip_id"].isin(trip_ids)]
             
 
@@ -152,7 +194,7 @@ def routes_from_to():
 
 
                 results.append({
-                    "route_id": route.get("route_long_name", ""),
+                    "route_id": route.get("route_long_name", route.get("route_short_name", route.get("route_id", "Unknown Route"))),
                     "shape_id": shape_id,
                     "next_departures": next_departures,
                     "start_stop": {
@@ -171,7 +213,7 @@ def routes_from_to():
                     }
                 })
 
-        print(f"[routes_from_to] Found {len(results)} routes")
+        logger.debug(f"Found {len(results)} routes")
         unique_keys = set()
         unique_results = []
         for r in results:
@@ -182,7 +224,7 @@ def routes_from_to():
         results = sorted(unique_results, key=lambda r: r["start_stop"]["distance_km"])
         return jsonify(results)
     except Exception as e:
-        print(f"[routes_from_to] ERROR: {e}")
+        logger.error(f"Error in routes_from_to: {e}")
         return jsonify({"error": str(e)}), 400
     
     
@@ -195,8 +237,17 @@ def route_shape():
 
         if not shape_id or not start_stop_id or not end_stop_id:
             return jsonify({"error": "Missing parameters"}), 400
+            
+        if shapes_df.empty:
+            logger.warning("No shapes data available")
+            return jsonify([])
 
         shape_points = shapes_df[shapes_df["shape_id"] == shape_id].sort_values("shape_pt_sequence")
+        
+        if shape_points.empty:
+            logger.warning(f"No shape found for shape_id: {shape_id}")
+            return jsonify([])
+            
         shape_coords = shape_points[["shape_pt_lat", "shape_pt_lon"]].values.tolist()
 
         # Get lat/lon for the stops
@@ -219,9 +270,11 @@ def route_shape():
 
         return jsonify(shape_segment)
     except Exception as e:
+        logger.error(f"Error in route_shape: {e}")
         return jsonify({"error": str(e)}), 500
 
 
 
 if __name__ == "__main__":
+    logger.info("Starting Flask application...")
     app.run(debug=True)

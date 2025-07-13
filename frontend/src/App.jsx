@@ -26,15 +26,16 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const mapRef = useRef(null);
 
+  // Updated transport modes based on GTFS route_type standards
   const transportModes = {
-    0: { label: "Tram", icon: "🚋", color: "#FF6B35" },
-    1: { label: "Metro", icon: "🚇", color: "#4CAF50" },
-    2: { label: "Rail", icon: "🚆", color: "#2196F3" },
-    3: { label: "Bus", icon: "🚌", color: "#FF9800" },
-    4: { label: "Ferry", icon: "⛴️", color: "#00BCD4" },
-    5: { label: "Cable Tram", icon: "🚠", color: "#9C27B0" },
-    6: { label: "Aerial Lift", icon: "🚡", color: "#795548" },
-    7: { label: "Funicular", icon: "🚞", color: "#607D8B" }
+    0: { label: "Tram", icon: "T", color: "#FF6B35" },
+    1: { label: "Metro", icon: "M", color: "#4CAF50" },
+    2: { label: "Rail", icon: "R", color: "#2196F3" },
+    3: { label: "Bus", icon: "B", color: "#FF9800" },
+    4: { label: "Ferry", icon: "F", color: "#00BCD4" },
+    5: { label: "Cable Tram", icon: "C", color: "#9C27B0" },
+    6: { label: "Aerial Lift", icon: "A", color: "#795548" },
+    7: { label: "Funicular", icon: "U", color: "#607D8B" }
   };
 
   const getRandomColor = () => {
@@ -81,14 +82,20 @@ function App() {
   const fetchStops = async (lat, lon) => {
     try {
       setIsLoading(true);
-      const url = `http://127.0.0.1:5000/stops_nearby_with_mode?lat=${lat}&lon=${lon}&radius_km=10`;
+      const url = `http://127.0.0.1:5000/stops_nearby_with_mode?lat=${lat}&lon=${lon}&radius_km=5`;
       const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
       const data = await res.json();
-      setStops(data);
+      console.log("Fetched stops:", data);
+      setStops(Array.isArray(data) ? data : []);
+      setError("");
       setIsLoading(false);
     } catch (err) {
-      console.error(err);
-      setError("Failed to fetch stops.");
+      console.error("Error fetching stops:", err);
+      setError("Failed to fetch nearby stops. Please check if the backend is running.");
+      setStops([]);
       setIsLoading(false);
     }
   };
@@ -97,9 +104,13 @@ function App() {
     if (!userPos) return;
     try {
       setIsLoading(true);
-      const res = await fetch(`http://127.0.0.1:5000/routes_from_to?start_lat=${userPos[0]}&start_lon=${userPos[1]}&end_lat=${lat}&end_lon=${lon}&radius_km=1.5`);
+      const res = await fetch(`http://127.0.0.1:5000/routes_from_to?start_lat=${userPos[0]}&start_lon=${userPos[1]}&end_lat=${lat}&end_lon=${lon}&radius_km=2`);
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
       const data = await res.json();
-      setRoutesInfo(data);
+      console.log("Fetched routes:", data);
+      setRoutesInfo(Array.isArray(data) ? data : []);
       setError(data.length === 0 ? "No routes found between these locations" : "");
 
       const colorMap = {};
@@ -111,17 +122,27 @@ function App() {
       const shapeData = {};
       for (const route of data) {
         if (route.shape_id) {
-          const shapeRes = await fetch(
-            `http://127.0.0.1:5000/route_shape?shape_id=${route.shape_id}&start_stop_id=${route.start_stop.stop_id}&end_stop_id=${route.end_stop.stop_id}`
-          );
-          const shapeCoords = await shapeRes.json();
-          shapeData[route.route_id] = shapeCoords.map(([lat, lon]) => [lat, lon]);
+          try {
+            const shapeRes = await fetch(
+              `http://127.0.0.1:5000/route_shape?shape_id=${route.shape_id}&start_stop_id=${route.start_stop.stop_id}&end_stop_id=${route.end_stop.stop_id}`
+            );
+            if (shapeRes.ok) {
+              const shapeCoords = await shapeRes.json();
+              if (Array.isArray(shapeCoords) && shapeCoords.length > 0) {
+                shapeData[route.route_id] = shapeCoords.map(([lat, lon]) => [lat, lon]);
+              }
+            }
+          } catch (shapeErr) {
+            console.warn("Failed to fetch shape for route:", route.route_id, shapeErr);
+          }
         }
       }
       setRouteShapes(shapeData);
       setIsLoading(false);
     } catch (e) {
-      setError("Failed to load routes");
+      console.error("Error fetching routes:", e);
+      setError("Failed to load routes. Please check if the backend is running.");
+      setRoutesInfo([]);
       setIsLoading(false);
     }
   };
@@ -139,7 +160,7 @@ function App() {
       const response = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(name)}&lang=en&limit=10`);
       const data = await response.json();
 
-      if (data.features.length > 0) {
+      if (data.features && data.features.length > 0) {
         const suggestions = data.features
           .map((feature) => {
             const [lon, lat] = feature.geometry.coordinates;
@@ -202,48 +223,13 @@ function App() {
     setDestSuggestions([]);
     setError("");
     setShowShape(false);
+    setDestination(stop);
 
-    try {
-      setIsLoading(true);
-      const res = await fetch(
-        `http://127.0.0.1:5000/routes_from_to?start_lat=${userPos[0]}&start_lon=${userPos[1]}&end_lat=${stop.lat}&end_lon=${stop.lon}&radius_km=1.5`
-      );
-      const data = await res.json();
+    await fetchRoutes(stop.lat, stop.lon);
 
-      setRoutesInfo(data);
-      setRouteShapes({});
-
-      const colorMap = {};
-      for (const route of data) {
-        colorMap[route.route_id] = getRandomColor();
-      }
-      setRouteColors(colorMap);
-
-      const shapeData = {};
-      for (const route of data) {
-        if (route.shape_id) {
-          const shapeRes = await fetch(
-            `http://127.0.0.1:5000/route_shape?shape_id=${route.shape_id}&start_stop_id=${route.start_stop.stop_id}&end_stop_id=${route.end_stop.stop_id}`
-          );
-          const shapeCoords = await shapeRes.json();
-          shapeData[route.route_id] = shapeCoords.map(([lat, lon]) => [lat, lon]);
-        }
-      }
-      setRouteShapes(shapeData);
-
-      if (data.length > 0) {
-        setSelectedRouteId(data[0].route_id);
-        setShowShape(true);
-      } else {
-        setSelectedRouteId(null);
-      }
-      setIsLoading(false);
-    } catch (err) {
-      console.error("Error fetching route:", err);
-      setError("Failed to fetch route to selected stop.");
-      setRoutesInfo([]);
-      setSelectedRouteId(null);
-      setIsLoading(false);
+    if (routesInfo.length > 0) {
+      setSelectedRouteId(routesInfo[0].route_id);
+      setShowShape(true);
     }
   };
 
@@ -265,24 +251,26 @@ function App() {
   };
 
   const createCustomIcon = (mode) => {
-    const modeInfo = transportModes[mode] || transportModes[0];
+    const modeInfo = transportModes[mode] || transportModes[3]; // Default to bus
     return new L.DivIcon({
       html: `<div style="
         background: ${modeInfo.color};
-        width: 24px;
-        height: 24px;
+        width: 28px;
+        height: 28px;
         border-radius: 50%;
-        border: 2px solid white;
+        border: 3px solid white;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 12px;
-        box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+        font-size: 14px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
         font-weight: bold;
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       ">${modeInfo.icon}</div>`,
       className: 'custom-marker',
-      iconSize: [24, 24],
-      iconAnchor: [12, 12]
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
     });
   };
 
@@ -299,12 +287,19 @@ function App() {
     return null;
   };
 
+  const filteredStops = stops.filter(s => 
+    s.lat !== undefined && 
+    s.lon !== undefined &&
+    s.stop_name.toLowerCase().includes(searchTerm.toLowerCase()) &&
+    visibleModes.includes(s.mode)
+  );
+
   return (
     <div className="app-container">
       {/* Sidebar */}
       <div className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-header">
-          <h1>🚇 Kochi Transit</h1>
+          <h1>Kochi Transit</h1>
           <button 
             className="collapse-btn"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -318,7 +313,7 @@ function App() {
           <div className="sidebar-content">
             {error && (
               <div className="error-message">
-                <span className="error-icon">⚠️</span>
+                <span className="error-icon">!</span>
                 {error}
               </div>
             )}
@@ -332,7 +327,7 @@ function App() {
 
             {!userPos && (
               <div className="location-section">
-                <h3>📍 Set Your Location</h3>
+                <h3>Set Your Location</h3>
                 <p className="section-description">Enter your coordinates to find nearby transit options</p>
                 <input
                   type="text"
@@ -350,7 +345,7 @@ function App() {
             {userPos && (
               <>
                 <div className="search-section">
-                  <h3>🎯 Find Routes</h3>
+                  <h3>Find Routes</h3>
                   <p className="section-description">Search for destinations or enter coordinates</p>
                   <input
                     type="text"
@@ -378,8 +373,19 @@ function App() {
                   )}
                 </div>
 
+                <div className="search-section">
+                  <h3>Filter Stops</h3>
+                  <input
+                    type="text"
+                    placeholder="Search stops by name..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="input-field"
+                  />
+                </div>
+
                 <div className="filter-section">
-                  <h3>🚊 Transport Modes</h3>
+                  <h3>Transport Modes</h3>
                   <p className="section-description">Filter stops by transport type</p>
                   <div className="mode-filters">
                     {Object.entries(transportModes).map(([mode, info]) => (
@@ -409,7 +415,7 @@ function App() {
                 {routesInfo.length > 0 && (
                   <div className="routes-section">
                     <div className="routes-header">
-                      <h3>🛤️ Available Routes ({routesInfo.length})</h3>
+                      <h3>Available Routes ({routesInfo.length})</h3>
                       <button onClick={handleReset} className="clear-button">
                         Clear All
                       </button>
@@ -450,7 +456,7 @@ function App() {
 
                           {route.next_departures && route.next_departures.length > 0 && (
                             <div className="departures">
-                              <span className="departures-label">⏰ Next departures:</span>
+                              <span className="departures-label">Next departures:</span>
                               <div className="departure-times">
                                 {route.next_departures.slice(0, 3).map((time, idx) => (
                                   <span key={idx} className="departure-time">{time}</span>
@@ -466,12 +472,12 @@ function App() {
 
                 {userPos && (
                   <div className="location-info">
-                    <h3>📍 Current Location</h3>
+                    <h3>Current Location</h3>
                     <p className="coordinates">
                       {userPos[0].toFixed(4)}, {userPos[1].toFixed(4)}
                     </p>
                     <p className="nearby-count">
-                      {stops.filter(s => visibleModes.includes(s.mode)).length} nearby stops
+                      {filteredStops.length} nearby stops
                     </p>
                   </div>
                 )}
@@ -499,7 +505,7 @@ function App() {
             <Marker position={userPos}>
               <Popup>
                 <div className="popup-content">
-                  <strong>📍 Your Location</strong>
+                  <strong>Your Location</strong>
                   <br />
                   <small>{userPos[0].toFixed(4)}, {userPos[1].toFixed(4)}</small>
                 </div>
@@ -507,36 +513,32 @@ function App() {
             </Marker>
 
             {/* Transit Stops */}
-            {stops
-              .filter(s => s.lat !== undefined && s.lon !== undefined)
-              .filter(s => s.stop_name.toLowerCase().includes(searchTerm.toLowerCase()))
-              .filter(s => visibleModes.includes(s.mode))
-              .map((stop) => (
-                <Marker
-                  key={stop.stop_id}
-                  position={[stop.lat, stop.lon]}
-                  icon={createCustomIcon(stop.mode)}
-                >
-                  <Popup>
-                    <div className="popup-content">
-                      <strong>{stop.stop_name}</strong>
-                      <br />
-                      <span className="popup-mode">
-                        {transportModes[stop.mode]?.icon} {transportModes[stop.mode]?.label}
-                      </span>
-                      <br />
-                      <span className="popup-distance">{stop.distance_km} km away</span>
-                      <br />
-                      <button
-                        className="popup-button"
-                        onClick={() => handleSetDestination(stop)}
-                      >
-                        Get Route Here
-                      </button>
-                    </div>
-                  </Popup>
-                </Marker>
-              ))}
+            {filteredStops.map((stop) => (
+              <Marker
+                key={stop.stop_id}
+                position={[stop.lat, stop.lon]}
+                icon={createCustomIcon(stop.mode)}
+              >
+                <Popup>
+                  <div className="popup-content">
+                    <strong>{stop.stop_name}</strong>
+                    <br />
+                    <span className="popup-mode">
+                      {transportModes[stop.mode]?.label || 'Unknown'}
+                    </span>
+                    <br />
+                    <span className="popup-distance">{stop.distance_km} km away</span>
+                    <br />
+                    <button
+                      className="popup-button"
+                      onClick={() => handleSetDestination(stop)}
+                    >
+                      Get Route Here
+                    </button>
+                  </div>
+                </Popup>
+              </Marker>
+            ))}
 
             {/* Route Shapes */}
             {routesInfo
@@ -554,15 +556,17 @@ function App() {
                       />
                     </>
                   )}
-                  <Marker position={[r.end_stop.lat, r.end_stop.lon]}>
-                    <Popup>
-                      <div className="popup-content">
-                        <strong>🎯 {r.end_stop.stop_name}</strong>
-                        <br />
-                        <span className="popup-route">Route: {r.route_id}</span>
-                      </div>
-                    </Popup>
-                  </Marker>
+                  {destination && (
+                    <Marker position={[destination.lat, destination.lon]}>
+                      <Popup>
+                        <div className="popup-content">
+                          <strong>{destination.stop_name}</strong>
+                          <br />
+                          <span className="popup-route">Destination</span>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )}
                 </React.Fragment>
               ))}
           </MapContainer>
